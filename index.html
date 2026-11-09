@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>SimulaBorsa</title>
+  <meta name="description" content="SimulaBorsa — trading simulato su azioni, ETF, indici, forex, futures, materie prime e cripto con dati gratuiti, grafici, stop loss, take profit, commissioni e imposte.">
+  <meta name="theme-color" content="#0b1120">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SimulaBorsa">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icons/logo.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icons/logo.svg" alt="" width="30" height="30"><span>Simula<em>Borsa</em></span></div>
+    <div class="top-actions" data-update-slot><div id="hdr-conto"></div></div>
+  </header>
+
+  <main id="view" class="view" tabindex="-1"></main>
+
+  <nav class="tabbar" id="tabbar" aria-label="Sezioni principali"></nav>
+
+  <div id="sheets"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/lib/lightweight-charts.js"></script>
+  <script src="js/dati.js"></script>
+  <script src="js/motore.js"></script>
+  <script src="js/grafico.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/aggiornamenti.js" data-version="1.0.0"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "date": "09/11/2026",
+  "notes": [
+    "Prima versione di SimulaBorsa",
+    "Trading simulato su azioni, ETF, indici, forex, futures, materie prime e cripto",
+    "Grafici con stop loss e take profit trascinabili, commissioni, imposte e zainetto fiscale"
+  ]
+}
