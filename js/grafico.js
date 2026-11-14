@@ -35,10 +35,37 @@
     return o;
   }
 
+  /* CUSUM sulla varianza (a due lati) sui rendimenti logaritmici.
+     z = r² / σ²base − 1, con σ²base = media di r² nelle n candele precedenti.
+     S+ = max(0, S+ + z − k)  → la volatilità aumenta
+     S− = max(0, S− − z − k)  → la volatilità diminuisce
+     Quando una delle due supera h si segnala un cambio e si azzera. */
+  function cusumVar(c, n, k, h) {
+    var up = [], dn = [], alarms = [], r2 = [], sp = 0, sm = 0, sum = 0;
+    for (var i = 1; i < c.length; i++) {
+      var a = c[i - 1].close, b = c[i].close;
+      var r = a > 0 && b > 0 ? Math.log(b / a) : 0, q = r * r;
+      if (r2.length >= n) {
+        var base = sum / n;
+        if (base > 0) {
+          var z = Math.min(q / base - 1, 50); // limita i salti estremi (gap)
+          sp = Math.max(0, sp + z - k); sm = Math.max(0, sm - z - k);
+          up.push({ time: c[i].time, value: sp }); dn.push({ time: c[i].time, value: sm });
+          if (sp > h) { alarms.push({ time: c[i].time, su: true }); sp = 0; sm = 0; }
+          else if (sm > h) { alarms.push({ time: c[i].time, su: false }); sp = 0; sm = 0; }
+        }
+        sum -= r2[r2.length - n];
+      }
+      r2.push(q); sum += q;
+    }
+    return { up: up, dn: dn, alarms: alarms };
+  }
+
   function Grafico(el, opzioni) {
     var self = this;
     this.el = el; this.op = opzioni || {};
-    this.ind = Object.assign({ volume: true, sma20: false, sma50: false, ema20: false, bb: false, rsi: false }, this.op.ind || {});
+    this.ind = Object.assign({ volume: true, sma20: false, sma50: false, ema20: false, bb: false, rsi: false, cusum: false, cusumN: 50, cusumK: 0.5, cusumH: 5 }, this.op.ind || {});
+    this._mkUtente = []; this._mkCusum = [];
     this.tipo = 'candele';
     this.dati = [];
     this.linee = {}; // id -> {line, cfg, handle}
@@ -54,7 +81,8 @@
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 6 },
       crosshair: { mode: LWC.CrosshairMode.Normal },
       handleScale: { axisPressedMouseMove: { time: true, price: true } },
-      localization: { locale: 'it-IT', priceFormatter: function (p) { return SB.motore.fmtP(p); } }
+      // il formato dei prezzi è sulla serie principale (così RSI e CUSUM hanno il loro)
+      localization: { locale: 'it-IT' }
     });
     this._serie();
     this.chart.subscribeClick(function (param) {
@@ -83,6 +111,7 @@
     if (this.tipo === 'linea') this.main = ch.addLineSeries({ color: '#5b8cff', lineWidth: 2 });
     else if (this.tipo === 'area') this.main = ch.addAreaSeries({ lineColor: '#5b8cff', topColor: 'rgba(91,140,255,.35)', bottomColor: 'rgba(91,140,255,0)', lineWidth: 2 });
     else this.main = ch.addCandlestickSeries({ upColor: c.up, downColor: c.down, borderVisible: false, wickUpColor: c.up, wickDownColor: c.down });
+    if (this._pf) this.main.applyOptions({ priceFormat: this._pf });
     // la scala dei prezzi include sempre entrata, stop loss e take profit
     var self = this;
     this.main.applyOptions({ autoscaleInfoProvider: function (orig) {
@@ -108,7 +137,9 @@
     this.dati = candles.map(function (k) { return { time: k.time + TZ, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume }; });
     var d = decimali == null ? 2 : decimali;
     this.prec = d;
-    this.main.applyOptions({ priceFormat: { type: 'price', precision: d, minMove: Math.pow(10, -d) } });
+    this._mkUtente = []; // i marker vanno riagganciati alle nuove candele (li rimette app.js)
+    this._pf = { type: 'custom', minMove: Math.pow(10, -d), formatter: function (p) { return SB.motore.fmtP(p); } };
+    this.main.applyOptions({ priceFormat: this._pf });
     this._disegna();
     this.chart.timeScale().fitContent();
     var n = this.dati.length;
@@ -131,19 +162,38 @@
     if (I.sma50) add(sma(c, 50), '#c77dff');
     if (I.ema20) add(ema(c, 20), '#3ad1e6');
     if (I.bb) { var b = boll(c, 20, 2); add(b[0], 'rgba(160,170,200,.7)', { lineStyle: 2 }); add(b[1], 'rgba(160,170,200,.7)', { lineStyle: 2 }); }
+    // riquadri inferiori (dal basso): CUSUM, RSI
+    var pane = [];
+    if (I.cusum) pane.push('cusum');
+    if (I.rsi) pane.push('rsi');
+    var PH = pane.length > 1 ? 0.17 : 0.24, np = pane.length;
+    var margini = function (id) { var i = pane.indexOf(id); return { top: 1 - (i + 1) * PH + 0.025, bottom: i * PH + 0.01 }; };
     if (I.volume) {
       var v = ch.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
       v.setData(c.map(function (k) { return { time: k.time, value: k.volume || 0, color: k.close >= k.open ? 'rgba(34,195,142,.35)' : 'rgba(255,93,108,.35)' }; }));
-      ch.priceScale('vol').applyOptions({ scaleMargins: { top: I.rsi ? 0.62 : 0.84, bottom: I.rsi ? 0.3 : 0 } });
+      ch.priceScale('vol').applyOptions({ scaleMargins: np ? { top: 1 - np * PH - 0.12, bottom: np * PH + 0.01 } : { top: 0.84, bottom: 0 } });
       this.extra.push(v); this.vol = v;
     } else this.vol = null;
     if (I.rsi) {
-      var r = add(rsi(c, 14), '#ff9f43', { priceScaleId: 'rsi', lastValueVisible: true });
-      ch.priceScale('rsi').applyOptions({ scaleMargins: { top: 0.74, bottom: 0.02 } });
+      var r = add(rsi(c, 14), '#ff9f43', { priceScaleId: 'rsi', lastValueVisible: true, title: 'RSI', priceFormat: { type: 'custom', minMove: 0.1, formatter: function (v) { return v.toFixed(1).replace('.', ','); } } });
+      ch.priceScale('rsi').applyOptions({ scaleMargins: margini('rsi') });
       r.createPriceLine({ price: 70, color: 'rgba(255,93,108,.5)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
       r.createPriceLine({ price: 30, color: 'rgba(34,195,142,.5)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
     }
-    ch.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: I.rsi ? 0.34 : (I.volume ? 0.2 : 0.06) } });
+    this._mkCusum = [];
+    if (I.cusum) {
+      var cs = cusumVar(c, Math.max(5, Math.round(I.cusumN) || 50), +I.cusumK >= 0 ? +I.cusumK : 0.5, +I.cusumH > 0 ? +I.cusumH : 5);
+      var fmt2 = { type: 'custom', minMove: 0.01, formatter: function (v) { return v.toFixed(2).replace('.', ','); } };
+      var su = add(cs.up, '#ff5d6c', { priceScaleId: 'cusum', lastValueVisible: true, title: 'CUSUM+', priceFormat: fmt2 });
+      add(cs.dn, '#22c38e', { priceScaleId: 'cusum', lastValueVisible: true, title: 'CUSUM−', priceFormat: fmt2 });
+      su.createPriceLine({ price: +I.cusumH || 5, color: 'rgba(245,185,66,.7)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'h' });
+      ch.priceScale('cusum').applyOptions({ scaleMargins: margini('cusum') });
+      this._mkCusum = cs.alarms.map(function (a) {
+        return { time: a.time, position: a.su ? 'aboveBar' : 'belowBar', color: a.su ? '#ff9f43' : '#3ad1e6', shape: 'square', text: a.su ? 'σ↑' : 'σ↓', size: 0.6 };
+      });
+    }
+    ch.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: np ? np * PH + (I.volume ? 0.06 : 0.04) : (I.volume ? 0.2 : 0.06) } });
+    this._applicaMarker();
   };
 
   Grafico.prototype.setInd = function (ind) { Object.assign(this.ind, ind); this._disegna(); };
@@ -247,8 +297,16 @@
       var t = x.time, lo = 0, hi = times.length - 1, best = null;
       while (lo <= hi) { var mid = (lo + hi) >> 1; if (times[mid] <= t) { best = times[mid]; lo = mid + 1; } else hi = mid - 1; }
       return best == null ? null : Object.assign(x, { time: best });
-    }).filter(Boolean).sort(function (a, b) { return a.time - b.time; });
-    this.main.setMarkers(mk);
+    }).filter(Boolean);
+    this._mkUtente = mk;
+    this._applicaMarker();
+  };
+
+  Grafico.prototype._applicaMarker = function () {
+    if (!this.main) return;
+    var all = (this._mkUtente || []).concat(this.ind.cusum ? (this._mkCusum || []) : []);
+    all.sort(function (a, b) { return a.time - b.time; });
+    this.main.setMarkers(all);
   };
 
   Grafico.prototype.scegliPrezzo = function (fn) {

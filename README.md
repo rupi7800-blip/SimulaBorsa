@@ -8,7 +8,7 @@ Web app di **trading simulato** (paper trading) utilizzabile da smartphone e com
   - Binance — cripto in tempo reale
   - Twelve Data — facoltativo, con chiave gratuita
   - Demo — prezzi simulati, sempre disponibili
-- **Grafici** a candele, linea o area da 1 minuto a 1 mese, con volumi, medie mobili 20/50, EMA 20, Bande di Bollinger, RSI e linee orizzontali.
+- **Grafici** a candele, linea o area da 1 minuto a 1 mese, con volumi, medie mobili 20/50, EMA 20, Bande di Bollinger, RSI, CUSUM sulla varianza (segnala i cambi di volatilità) e linee orizzontali. Le linee di entrata, stop e target si possono nascondere con il tasto 👁.
 - **Ordini automatici**: a mercato, limite, stop; stop loss, take profit e trailing stop; validità fino a revoca o solo oggi; long e short con leva.
 - **Sul grafico**: tocca 📍 e poi il grafico per fissare entrata, SL o TP; trascina le maniglie per spostare stop, target e ordini.
 - **Dimensionamento**: per quantità, per importo in euro o per rischio % del capitale (in base allo stop).

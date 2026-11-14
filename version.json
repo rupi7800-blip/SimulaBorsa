@@ -1,9 +1,11 @@
 {
-  "version": "1.0.0",
-  "date": "09/11/2026",
+  "version": "1.1.0",
+  "date": "14/11/2026",
   "notes": [
-    "Prima versione di SimulaBorsa",
-    "Trading simulato su azioni, ETF, indici, forex, futures, materie prime e cripto",
-    "Grafici con stop loss e take profit trascinabili, commissioni, imposte e zainetto fiscale"
+    "Tasto 👁 Linee: nasconde o mostra entrata, stop loss e take profit sul grafico (anche singolarmente dal menu Indicatori)",
+    "Nuovo indicatore CUSUM sulla varianza con segnali σ↑ / σ↓ quando cambia la volatilità",
+    "Connessione dati più veloce e affidabile: proxy provati in parallelo, server Yahoo di riserva, nuovo tentativo automatico",
+    "Se la connessione fallisce viene mostrato l'ultimo grafico salvato",
+    "Prova connessione: esito dettagliato per ogni proxy, utile per capire perché un dispositivo non carica i dati"
   ]
 }

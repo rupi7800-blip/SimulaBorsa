@@ -62,9 +62,12 @@
 
   /* ---------- UI di base ---------- */
   var ui = { tab: 'mercati', cat: 'preferiti', sid: null, tf: '15m', gr: null, quote: {}, pannello: 'ordine', ticket: null, prezzo: null, prev: null, fx: 1 };
-  try { var u0 = JSON.parse(localStorage.getItem('sb.ui') || '{}'); ['tab', 'cat', 'sid', 'tf'].forEach(function (k) { if (u0[k]) ui[k] = u0[k]; }); ui.ind = u0.ind; ui.tipoGr = u0.tipoGr; } catch (e) { /* no */ }
+  try { var u0 = JSON.parse(localStorage.getItem('sb.ui') || '{}'); ['tab', 'cat', 'sid', 'tf'].forEach(function (k) { if (u0[k]) ui[k] = u0[k]; }); ui.ind = u0.ind; ui.tipoGr = u0.tipoGr; ui.vis = u0.vis; } catch (e) { /* no */ }
+  ui.vis = Object.assign({ entrata: true, sl: true, tp: true, disegnate: true }, ui.vis || {});
+  var GRUPPI_LINEE = [['entrata', 'Entrata e ordini'], ['sl', 'Stop loss e trailing'], ['tp', 'Take profit'], ['disegnate', 'Linee disegnate']];
+  function lineeVisibili() { return GRUPPI_LINEE.some(function (g) { return ui.vis[g[0]]; }); }
   if (!ui.sid) ui.sid = 'D:DEMO_AZ';
-  function salvaUi() { try { localStorage.setItem('sb.ui', JSON.stringify({ tab: ui.tab, cat: ui.cat, sid: ui.sid, tf: ui.tf, ind: ui.gr ? ui.gr.ind : ui.ind, tipoGr: ui.gr ? ui.gr.tipo : ui.tipoGr })); } catch (e) { /* no */ } }
+  function salvaUi() { try { localStorage.setItem('sb.ui', JSON.stringify({ tab: ui.tab, cat: ui.cat, sid: ui.sid, tf: ui.tf, ind: ui.gr ? ui.gr.ind : ui.ind, tipoGr: ui.gr ? ui.gr.tipo : ui.tipoGr, vis: ui.vis })); } catch (e) { /* no */ } }
 
   function toast(msg, tipo) {
     var t = $('#toast');
@@ -200,7 +203,7 @@
       '<div class="g-price"><b id="g-px">–</b><em id="g-ch"></em></div>' +
       '<button class="icon-btn star ' + (fav ? 'on' : '') + '" id="g-star" aria-label="Preferito">' + ICON.stella + '</button><button class="icon-btn" id="g-info" aria-label="Dettagli strumento">' + ICON.info + '</button></div>' +
       '<div class="tf-row"><div class="chips sm">' + D.TF_LIST.map(function (t) { return '<button class="chip ' + (ui.tf === t ? 'on' : '') + '" data-tf="' + t + '">' + t + '</button>'; }).join('') + '</div>' +
-      '<button class="chip" id="g-ind">Indicatori</button><button class="chip" id="g-line" title="Disegna una linea orizzontale">─ Linea</button></div>' +
+      '<button class="chip" id="g-ind">Indicatori</button><button class="chip' + (lineeVisibili() ? ' on' : '') + '" id="g-vis" title="Mostra o nascondi entrata, stop loss e take profit sul grafico" aria-label="Mostra o nascondi linee di entrata, stop e target">👁<span class="hide-sm"> Linee</span></button><button class="chip" id="g-line" title="Disegna una linea orizzontale">─ Linea</button></div>' +
       '<div class="chart-wrap"><div id="chart" class="chart"></div><div class="legend" id="legend"></div><div class="pick-hint" id="pick-hint"></div><div class="chart-msg" id="chart-msg">Caricamento…</div></div>' +
       '<div class="seg g-tabs"><button data-pan="ordine">Nuovo ordine</button><button data-pan="pos">Posizioni <span id="n-pos"></span></button><button data-pan="ord">In attesa <span id="n-ord"></span></button></div>' +
       '<div id="g-panel" class="pad"></div>';
@@ -224,30 +227,35 @@
     clearInterval(pollT);
     D.grafico(sid, tf).then(function (r) {
       if (!ui.gr || ui.sid !== sid || ui.tf !== tf) return;
+      ui.grCache = !!r.cache;
       var info = M.setInfo(sid, Object.assign({ m: M.info(sid).m || MULT[D.parseId(sid).s] || 1 }, r.meta));
       $('#g-name').textContent = info.n + (info.x ? ' · ' + info.x : '') + ' · ' + info.c;
       if (!r.candles.length) throw new Error('Nessun dato per questo intervallo');
       ui.gr.set(r.candles, M.decimali(r.price || r.candles[r.candles.length - 1].close));
       $('#chart-msg').style.display = 'none';
+      if (r.cache) toast('Connessione ai dati non riuscita: mostro il grafico salvato il ' + data(r.cache / 1000) + '. Riprovo da solo.', 'warn');
       ui.prev = r.candles.length > 1 ? r.candles[r.candles.length - 2].close : null;
       var prevDay = null;
       if (tf === '1D') prevDay = ui.prev;
       ui.prevDay = prevDay || (ui.quote[sid] && ui.quote[sid].prev) || null;
       if (!ui.prevDay) D.quotazioni([sid]).then(function (q) { if (q[sid] && q[sid].prev && ui.sid === sid) { ui.prevDay = q[sid].prev; nuovoPrezzo(ui.prezzo, true); } });
       return D.cambio(info.c, M.conto().valuta).then(function (fx) { ui.fx = fx; }).catch(function () { ui.fx = 1; toast('Cambio ' + info.c + ' non disponibile: uso 1', 'warn'); })
-        .then(function () { nuovoPrezzo(r.price != null ? r.price : r.candles[r.candles.length - 1].close, true); disegnaLinee(); markers(); });
+        .then(function () { nuovoPrezzo(r.price != null ? r.price : r.candles[r.candles.length - 1].close, true, !!r.cache); disegnaLinee(); markers(); });
     }).catch(function (e) {
       if (!ui.gr) return;
-      $('#chart-msg').innerHTML = 'Dati non disponibili: ' + esc(e.message) + '<br><small>Prova un altro intervallo, oppure verifica la connessione dati nelle Impostazioni.</small>';
+      $('#chart-msg').innerHTML = '<div>Dati non disponibili: ' + esc(e.message) + '<br><small>Prova un altro intervallo, oppure usa "Prova connessione ai dati" nelle Impostazioni.</small><br><button class="btn ghost sm" data-act="riprova-gr">Riprova</button></div>';
     });
     var per = D.parseId(sid).p === 'B' || D.parseId(sid).p === 'D' ? 4 : Math.max(10, +S.imp.dati.refresh || 15);
+    var errori = 0;
     pollT = setInterval(function () {
       if (document.hidden || !ui.gr || ui.sid !== sid) return;
+      // grafico non ancora caricato (o da cache): ritento lo scaricamento completo
+      if (!ui.gr.dati.length || ui.grCache) { if (++errori % 3 === 0) caricaGrafico(); return; }
       D.prezzo(sid).then(function (p) { if (ui.gr && ui.sid === sid) nuovoPrezzo(p); }).catch(function () {});
     }, per * 1000);
   }
 
-  function nuovoPrezzo(p, primo) {
+  function nuovoPrezzo(p, primo, vecchio) {
     if (p == null || isNaN(p)) return;
     var old = ui.prezzo;
     ui.prezzo = p;
@@ -260,7 +268,8 @@
       var pr = ui.quote[ui.sid].prev, ch = pr ? (p / pr - 1) * 100 : null;
       $('#g-ch').className = segno(ch); $('#g-ch').textContent = ch != null ? pm(ch) + '%' : '';
     }
-    // il motore controlla ordini e stop su ogni prezzo nuovo
+    // il motore controlla ordini e stop su ogni prezzo nuovo (mai sui prezzi della cache)
+    if (vecchio) return aggiornaPannello();
     var ev = 0;
     Object.keys(S.conti).forEach(function (k) { ev += M.processa(S.conti[k], ui.sid, [{ time: M.now(), open: p, high: p, low: p, close: p }], ui.fx); });
     if (ev) { disegnaLinee(); markers(); renderHeader(); }
@@ -273,9 +282,9 @@
     c.posizioni.forEach(function (p) {
       if (p.str.id !== sid) return;
       var nome = (p.lato === 'buy' ? 'Long ' : 'Short ') + p.qta;
-      L.push({ id: 'pe' + p.id, prezzo: p.entrata, colore: '#5b8cff', titolo: nome, stile: 0, spessore: 1 });
+      L.push({ id: 'pe' + p.id, gruppo: 'entrata', prezzo: p.entrata, colore: '#5b8cff', titolo: nome, stile: 0, spessore: 1 });
       var addSL = function (campo, colore, tit) {
-        L.push({ id: campo + p.id, prezzo: p[campo], colore: colore, titolo: tit, etichetta: tit, drag: function (np) {
+        L.push({ id: campo + p.id, gruppo: campo, prezzo: p[campo], colore: colore, titolo: tit, etichetta: tit, drag: function (np) {
           var o = {}; o[campo] = np;
           var e = M.modificaPos(p.id, o);
           if (e) { toast(e, 'err'); return false; }
@@ -286,20 +295,20 @@
       if (p.tp != null) addSL('tp', '#22c38e', 'TP');
       if (p.trail) {
         var ts = p.lato === 'buy' ? p.best * (1 - p.trail / 100) : p.best * (1 + p.trail / 100);
-        L.push({ id: 'tr' + p.id, prezzo: ts, colore: '#ff9f43', titolo: 'Trailing ' + fmt(p.trail, 1) + '%', stile: 1, spessore: 1 });
+        L.push({ id: 'tr' + p.id, gruppo: 'sl', prezzo: ts, colore: '#ff9f43', titolo: 'Trailing ' + fmt(p.trail, 1) + '%', stile: 1, spessore: 1 });
       }
     });
     c.ordini.forEach(function (o) {
       if (o.str.id !== sid) return;
       var tit = (o.lato === 'buy' ? 'Buy ' : 'Sell ') + (o.tipo === 'limit' ? 'limit' : 'stop') + ' ' + o.qta;
-      L.push({ id: 'o' + o.id, prezzo: o.prezzo, colore: '#f5b942', titolo: tit, etichetta: 'Ordine', drag: function (np) {
+      L.push({ id: 'o' + o.id, gruppo: 'entrata', prezzo: o.prezzo, colore: '#f5b942', titolo: tit, etichetta: 'Ordine', drag: function (np) {
         var e = M.modificaOrd(o.id, { prezzo: np });
         if (e) { toast(e, 'err'); return false; }
         toast('Ordine spostato a ' + fmtP(np)); aggiornaPannello(); return true;
       } });
       ['sl', 'tp'].forEach(function (k) {
         if (o[k] == null) return;
-        L.push({ id: 'o' + k + o.id, prezzo: o[k], colore: k === 'sl' ? 'rgba(255,93,108,.7)' : 'rgba(34,195,142,.7)', titolo: k.toUpperCase() + ' ordine', etichetta: k.toUpperCase(), drag: function (np) {
+        L.push({ id: 'o' + k + o.id, gruppo: k, prezzo: o[k], colore: k === 'sl' ? 'rgba(255,93,108,.7)' : 'rgba(34,195,142,.7)', titolo: k.toUpperCase() + ' ordine', etichetta: k.toUpperCase(), drag: function (np) {
           var x = {}; x[k] = np; var e = M.modificaOrd(o.id, x);
           if (e) { toast(e, 'err'); return false; } aggiornaPannello(); return true;
         } });
@@ -310,15 +319,17 @@
     if (t && ui.pannello === 'ordine') {
       var live = function (campo) { return function (np) { t[campo] = np; var inp = $('#t-' + campo); if (inp) inp.value = arrot(np); aggiornaRiepilogo(); }; };
       var fine = function (campo) { return function (np) { t[campo] = np; var inp = $('#t-' + campo); if (inp) inp.value = arrot(np); aggiornaRiepilogo(); return true; }; };
-      if (t.tipo !== 'market' && t.prezzo) L.push({ id: 'tk-p', prezzo: t.prezzo, colore: '#f5b942', titolo: 'Entrata', etichetta: 'Entrata', live: live('prezzo'), drag: fine('prezzo') });
-      if (t.sl) L.push({ id: 'tk-sl', prezzo: t.sl, colore: '#ff5d6c', titolo: 'Stop loss', etichetta: 'SL', live: live('sl'), drag: fine('sl') });
-      if (t.tp) L.push({ id: 'tk-tp', prezzo: t.tp, colore: '#22c38e', titolo: 'Take profit', etichetta: 'TP', live: live('tp'), drag: fine('tp') });
+      if (t.tipo !== 'market' && t.prezzo) L.push({ id: 'tk-p', gruppo: 'entrata', prezzo: t.prezzo, colore: '#f5b942', titolo: 'Entrata', etichetta: 'Entrata', live: live('prezzo'), drag: fine('prezzo') });
+      if (t.sl) L.push({ id: 'tk-sl', gruppo: 'sl', prezzo: t.sl, colore: '#ff5d6c', titolo: 'Stop loss', etichetta: 'SL', live: live('sl'), drag: fine('sl') });
+      if (t.tp) L.push({ id: 'tk-tp', gruppo: 'tp', prezzo: t.tp, colore: '#22c38e', titolo: 'Take profit', etichetta: 'TP', live: live('tp'), drag: fine('tp') });
     }
     (S.linee[sid] || []).forEach(function (pz, i) {
-      L.push({ id: 'ln' + i, prezzo: pz, colore: '#9aa6c0', titolo: '', etichetta: '✕', stile: 0, spessore: 1, drag: function (np) { S.linee[sid][i] = np; M.salva(); return true; },
+      L.push({ id: 'ln' + i, gruppo: 'disegnate', prezzo: pz, colore: '#9aa6c0', titolo: '', etichetta: '✕', stile: 0, spessore: 1, drag: function (np) { S.linee[sid][i] = np; M.salva(); return true; },
         tap: function () { S.linee[sid].splice(i, 1); M.salva(); disegnaLinee(); } });
     });
     L.forEach(function (x) { if (x.id.indexOf('ln') !== 0) x.scala = true; });
+    // linee nascoste dall'utente (tasto 👁 Linee o menu Indicatori)
+    L = L.filter(function (x) { return ui.vis[x.gruppo] !== false; });
     ui.gr.linee_(L);
     $('#n-pos') && ($('#n-pos').textContent = c.posizioni.filter(function (p) { return p.str.id === sid; }).length || '');
     $('#n-ord') && ($('#n-ord').textContent = c.ordini.filter(function (o) { return o.str.id === sid; }).length || '');
@@ -510,11 +521,23 @@
 
   function sheetIndicatori() {
     var I = ui.gr.ind, tipo = ui.gr.tipo;
-    var opt = [['volume', 'Volumi'], ['sma20', 'Media mobile 20'], ['sma50', 'Media mobile 50'], ['ema20', 'Media esponenziale 20'], ['bb', 'Bande di Bollinger'], ['rsi', 'RSI 14']];
+    var opt = [['volume', 'Volumi'], ['sma20', 'Media mobile 20'], ['sma50', 'Media mobile 50'], ['ema20', 'Media esponenziale 20'], ['bb', 'Bande di Bollinger'], ['rsi', 'RSI 14'], ['cusum', 'CUSUM sulla varianza']];
+    var num = function (k, lbl, step) { return '<div><div class="lbl">' + lbl + '</div><input class="inp" type="number" step="' + step + '" min="0" data-cus="' + k + '" value="' + I[k] + '"></div>'; };
     sheet('<h3>Grafico</h3><div class="seg" data-seg="gtipo">' + [['candele', 'Candele'], ['linea', 'Linea'], ['area', 'Area']].map(function (o) { return '<button class="' + (tipo === o[0] ? 'on' : '') + '" data-v="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="lista-check">' + opt.map(function (o) { return '<label class="sw"><input type="checkbox" data-ind="' + o[0] + '"' + (I[o[0]] ? ' checked' : '') + '><span>' + o[1] + '</span></label>'; }).join('') + '</div><button class="btn" data-close>Fatto</button>',
+      '<div class="lista-check">' + opt.map(function (o) { return '<label class="sw"><input type="checkbox" data-ind="' + o[0] + '"' + (I[o[0]] ? ' checked' : '') + '><span>' + o[1] + '</span></label>'; }).join('') + '</div>' +
+      '<div class="cus-par"><div class="grid3">' + num('cusumN', 'Finestra base', 1) + num('cusumK', 'Tolleranza k', 0.1) + num('cusumH', 'Soglia h', 0.5) + '</div>' +
+      '<p class="nota">Il CUSUM confronta i rendimenti al quadrato con la varianza delle ultime N candele. <b style="color:#ff5d6c">CUSUM+</b> sale quando la volatilità aumenta, <b style="color:#22c38e">CUSUM−</b> quando diminuisce; oltre la soglia h compare un segnale <b>σ↑</b> / <b>σ↓</b> sul grafico e il conteggio riparte.</p></div>' +
+      '<h3>Linee sul grafico</h3><div class="lista-check">' + GRUPPI_LINEE.map(function (g) { return '<label class="sw"><input type="checkbox" data-vis="' + g[0] + '"' + (ui.vis[g[0]] ? ' checked' : '') + '><span>' + g[1] + '</span></label>'; }).join('') + '</div>' +
+      '<p class="nota">Nascondere una linea non annulla l\'ordine: stop e target continuano a funzionare.</p><button class="btn" data-close>Fatto</button>',
       function (el) {
-        el.addEventListener('change', function (e) { var k = e.target.dataset.ind; if (!k) return; var o = {}; o[k] = e.target.checked; ui.gr.setInd(o); salvaUi(); });
+        var cus = function () { el.querySelector('.cus-par').style.display = ui.gr.ind.cusum ? '' : 'none'; };
+        cus();
+        el.addEventListener('change', function (e) {
+          var t = e.target, o = {};
+          if (t.dataset.vis) { ui.vis[t.dataset.vis] = t.checked; $('#g-vis') && $('#g-vis').classList.toggle('on', lineeVisibili()); salvaUi(); return disegnaLinee(); }
+          if (t.dataset.cus) { var v = +t.value; if (t.value === '' || isNaN(v) || v < 0 || (v === 0 && t.dataset.cus !== 'cusumK')) return; if (t.dataset.cus === 'cusumN') v = Math.max(5, Math.round(v)); o[t.dataset.cus] = v; ui.gr.setInd(o); markers(); return salvaUi(); }
+          var k = t.dataset.ind; if (!k) return; o[k] = t.checked; ui.gr.setInd(o); markers(); cus(); salvaUi();
+        });
         el.addEventListener('click', function (e) {
           var b = e.target.closest('[data-seg="gtipo"] button'); if (!b) return;
           $$('[data-seg="gtipo"] button', el).forEach(function (x) { x.classList.toggle('on', x === b); });
@@ -902,12 +925,19 @@
     if (e.target.closest('#g-info')) return sheetStrumento();
     if (e.target.closest('#g-ind')) return sheetIndicatori();
     if (e.target.closest('#g-line')) return disegnaLinea();
+    if (e.target.closest('#g-vis')) {
+      var mostra = !lineeVisibili();
+      GRUPPI_LINEE.forEach(function (g) { ui.vis[g[0]] = mostra; });
+      $('#g-vis').classList.toggle('on', mostra); salvaUi(); disegnaLinee();
+      return toast(mostra ? 'Linee di entrata, stop e target visibili' : 'Linee nascoste (gli ordini restano attivi)');
+    }
     if ((b = e.target.closest('[data-mod]'))) return sheetModifica(b.dataset.mod);
     if ((b = e.target.closest('[data-chiudi]'))) return sheetChiudi(b.dataset.chiudi);
     if ((b = e.target.closest('[data-modord]'))) return sheetModOrd(b.dataset.modord);
     if ((b = e.target.closest('[data-annulla]'))) { M.annulla(M.conto(), b.dataset.annulla); return refresh(); }
     if ((b = e.target.closest('[data-act]'))) {
       var a = b.dataset.act;
+      if (a === 'riprova-gr') return caricaGrafico();
       if (a === 'pick-off') { ui.gr && ui.gr.scegliPrezzo(null); $('#pick-hint').classList.remove('on'); }
       if (a === 'conti') sheetConti();
       if (a === 'deposito') sheetDeposito();
@@ -922,7 +952,15 @@
       }, 'Azzera');
       if (a === 'prova') {
         var out = $('#prova-out'); out.textContent = 'Verifica in corso…';
-        D.prova().then(function (r) { out.innerHTML = '<div class="mov"><span>Yahoo</span><b>' + esc(r.yahoo) + '</b></div><div class="mov"><span>Binance</span><b>' + esc(r.binance) + '</b></div><div class="mov"><span>Twelve Data</span><b>' + esc(r.twelve) + '</b></div><div class="mov"><span>Cambi</span><b>' + esc(r.cambi) + '</b></div>'; });
+        D.prova().then(function (r) {
+          var riga = function (a, b, cls) { return '<div class="mov"><span>' + esc(a) + '</span><b class="' + (cls || '') + '">' + esc(b) + '</b></div>'; };
+          out.innerHTML = (r.online ? '' : riga('Rete', 'il browser risulta offline', 'neg')) +
+            riga('Yahoo', r.yahoo, /^ok/.test(r.yahoo) ? 'pos' : 'neg') +
+            r.proxy.map(function (x) { return riga('  · ' + x.nome, x.ok ? 'ok · ' + x.ms + ' ms' : x.esito, x.ok ? 'pos' : 'neg'); }).join('') +
+            riga('Binance', r.binance, /^ok/.test(r.binance) ? 'pos' : 'neg') + riga('Twelve Data', r.twelve) + riga('Cambi', r.cambi, /^ok/.test(r.cambi) ? 'pos' : 'neg') +
+            (/^ok/.test(r.yahoo) ? '' : '<p class="nota">Nessun proxy raggiunge Yahoo da questo dispositivo. Sul PC la causa più comune è un <b>blocco pubblicità/antivirus/firewall aziendale</b> che blocca i proxy: prova a disattivarlo per questo sito, oppure crea il tuo <b>proxy personale</b> su Cloudflare (gratuito) e incollalo qui sopra. Binance e Demo funzionano comunque.</p>');
+          if (ui.tab === 'grafico' && ui.grCache) caricaGrafico();
+        });
       }
     }
   });
@@ -939,7 +977,7 @@
   document.addEventListener('change', function (e) { if (e.target.id === 't-leva') { ui.ticket.leva = +e.target.value; aggiornaRiepilogo(); } });
 
   document.addEventListener('visibilitychange', function () { if (!document.hidden) ciclo(); });
-  window.addEventListener('online', ciclo);
+  window.addEventListener('online', function () { ciclo(); if (ui.tab === 'grafico' && ui.gr && (!ui.gr.dati.length || ui.grCache)) caricaGrafico(); });
   // prezzi della lista e motore
   setInterval(function () { if (!document.hidden) ciclo(); }, 60000);
   setInterval(function () { if (!document.hidden && ui.tab === 'mercati' && !($('#q') || {}).value) aggiornaQuote(idsCat()); }, 30000);

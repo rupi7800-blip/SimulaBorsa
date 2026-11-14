@@ -27,7 +27,9 @@
   var DEFAULT_PROXIES = [
     'https://corsproxy.io/?url=',
     'https://api.allorigins.win/raw?url=',
-    'https://api.codetabs.com/v1/proxy?quest='
+    'https://api.codetabs.com/v1/proxy?quest=',
+    'https://api.cors.lol/?url=',
+    'https://whateverorigin.org/get?url='
   ];
   var BINANCE = ['https://data-api.binance.vision', 'https://api.binance.com', 'https://api1.binance.com'];
 
@@ -44,28 +46,77 @@
     return undefined;
   }
   function getJSON(url, ms) {
-    return fetch(url, { signal: timeout(ms || 12000), cache: 'no-store' }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+    var stato = 0;
+    return fetch(url, { signal: timeout(ms || 12000), cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' }).then(function (r) {
+      stato = r.status;
+      return r.text();
+    }).then(function (t) {
+      var j = null;
+      try { j = JSON.parse(t); } catch (e) { /* non JSON */ }
+      // errori di Yahoo (es. simbolo inesistente) arrivano come JSON con stato 404
+      if (stato >= 200 && stato < 300 && j) return j;
+      if (j && ((j.chart && j.chart.error) || (j.finance && j.finance.error))) return j;
+      throw new Error(stato >= 300 || stato < 200 ? 'HTTP ' + stato : 'risposta non valida');
+    }, function (e) {
+      if (e && e.name === 'AbortError') throw new Error('tempo scaduto');
+      if (e && /fetch|network|Load failed/i.test(e.message)) throw new Error('bloccato (rete, CORS o blocco pubblicità)');
+      throw e;
     });
   }
+  function anyOf(promises) {
+    return new Promise(function (ok, ko) {
+      var n = promises.length, errs = [];
+      if (!n) return ko(new Error('Nessun proxy configurato'));
+      promises.forEach(function (p, i) { p.then(ok, function (e) { errs[i] = e; if (--n === 0) ko(errs[errs.length - 1] || e); }); });
+    });
+  }
+  function bust(url) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_=' + Math.floor(Date.now() / 5000); }
 
-  var bestProxy = 0;
+  // proxy migliore ricordato tra una sessione e l'altra
+  var bestProxyUrl = null;
+  try { bestProxyUrl = localStorage.getItem('sb.proxy'); } catch (e) { /* no */ }
+  var inVolo = {};
+  function unProxy(p, url, ms) {
+    return getJSON(p + encodeURIComponent(bust(url)), ms).then(function (j) {
+      if (j && typeof j.contents === 'string') j = JSON.parse(j.contents);
+      if (!j || typeof j !== 'object') throw new Error('risposta vuota');
+      return j;
+    });
+  }
+  function ricorda(p) { if (bestProxyUrl === p) return; bestProxyUrl = p; try { localStorage.setItem('sb.proxy', p); } catch (e) { /* no */ } }
+  /* Prima il proxy che ha funzionato l'ultima volta (risposta veloce);
+     se fallisce, tutti gli altri in parallelo: vince il primo che risponde. */
   function viaProxy(url) {
+    if (inVolo[url]) return inVolo[url];
     var list = proxies();
-    var order = [];
-    for (var i = 0; i < list.length; i++) order.push((bestProxy + i) % list.length);
-    var idx = 0;
-    function next(err) {
-      if (idx >= order.length) return Promise.reject(err || new Error('Nessun proxy raggiungibile'));
-      var k = order[idx++], p = list[k];
-      return getJSON(p + encodeURIComponent(url), 12000).then(function (j) {
-        if (j && j.contents && typeof j.contents === 'string') j = JSON.parse(j.contents);
-        bestProxy = k;
-        return j;
-      }).catch(next);
+    // il proxy personale ha sempre la precedenza
+    var first = cfg().proxyPersonale || (list.indexOf(bestProxyUrl) >= 0 ? bestProxyUrl : list[0]);
+    var rest = list.filter(function (p) { return p !== first; });
+    var gara = function () {
+      return anyOf(rest.map(function (p) { return unProxy(p, url, 12000).then(function (j) { ricorda(p); return j; }); }));
+    };
+    var pr = unProxy(first, url, 7000).then(function (j) { ricorda(first); return j; }, function (e) {
+      return rest.length ? gara() : Promise.reject(e);
+    }).catch(function (e) {
+      throw new Error(navigator.onLine === false ? 'Sei offline' : 'Nessun proxy raggiungibile (' + (e && e.message) + ')');
+    });
+    inVolo[url] = pr;
+    var pulisci = function () { delete inVolo[url]; };
+    pr.then(pulisci, pulisci);
+    return pr;
+  }
+
+  /* ---------- Cache dei grafici (ultimo scaricamento riuscito) ---------- */
+  var CACHE_KEY = 'sb.cache', CACHE_MAX = 25;
+  function cacheLeggi() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch (e) { return {}; } }
+  function cacheSalva(k, r) {
+    var c = cacheLeggi();
+    c[k] = { t: Date.now(), r: { candles: r.candles.slice(-600), price: r.price, meta: r.meta } };
+    var keys = Object.keys(c).sort(function (a, b) { return c[b].t - c[a].t; });
+    keys.slice(CACHE_MAX).forEach(function (x) { delete c[x]; });
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch (e) {
+      try { localStorage.removeItem(CACHE_KEY); } catch (e2) { /* no */ }
     }
-    return next();
   }
 
   /* ---------- Normalizzazione ---------- */
@@ -89,10 +140,17 @@
   }
 
   /* ---------- Yahoo ---------- */
+  // Yahoo ha due server equivalenti: se uno è bloccato si prova l'altro
+  function yahoo(u) {
+    return viaProxy(u).catch(function (e) {
+      var alt = u.indexOf('//query1.') > 0 ? u.replace('//query1.', '//query2.') : u.replace('//query2.', '//query1.');
+      return viaProxy(alt).catch(function () { throw e; });
+    });
+  }
   var Y = {
     chart: function (sym, interval, range) {
       var u = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?interval=' + interval + '&range=' + range + '&includePrePost=false';
-      return viaProxy(u).then(function (j) {
+      return yahoo(u).then(function (j) {
         var r = j && j.chart && j.chart.result && j.chart.result[0];
         if (!r) throw new Error((j && j.chart && j.chart.error && j.chart.error.description) || 'Simbolo non trovato');
         var m = r.meta || {}, f = fixCcy(m.currency), q = (r.indicators && r.indicators.quote && r.indicators.quote[0]) || {};
@@ -114,7 +172,7 @@
     },
     search: function (q) {
       var u = 'https://query2.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(q) + '&quotesCount=20&newsCount=0&listsCount=0';
-      return viaProxy(u).then(function (j) {
+      return yahoo(u).then(function (j) {
         return ((j && j.quotes) || []).filter(function (x) { return x.symbol; }).map(function (x) {
           return { id: 'Y:' + x.symbol, p: 'Y', s: x.symbol, n: x.longname || x.shortname || x.symbol, t: YTYPE[x.quoteType] || 'azione', x: x.exchDisp || x.exchange || '' };
         });
@@ -247,11 +305,22 @@
 
     /* candele per il grafico */
     grafico: function (id, tf) {
-      var k = parseId(id), def = TF[tf];
-      if (k.p === 'B') return B.chart(k.s, tf);
+      var k = parseId(id), def = TF[tf], p;
       if (k.p === 'D') return D.chart(k.s, tf);
-      if (k.p === 'T') return T.chart(tdSym(id), tf);
-      return Y.chart(k.s, def.y[0], def.y[1]).then(function (r) { if (def.agg) r.candles = aggrega(r.candles, def.agg); return r; });
+      if (k.p === 'B') p = B.chart(k.s, tf);
+      else if (k.p === 'T') p = T.chart(tdSym(id), tf);
+      else p = Y.chart(k.s, def.y[0], def.y[1]).then(function (r) { if (def.agg) r.candles = aggrega(r.candles, def.agg); return r; });
+      var key = id + '|' + tf;
+      return p.then(function (r) {
+        if (r.candles && r.candles.length) cacheSalva(key, r);
+        return r;
+      }, function (e) {
+        // se il download fallisce mostro l'ultimo grafico salvato
+        var c = cacheLeggi()[key];
+        if (!c) throw e;
+        var r = c.r; r.cache = c.t; r.errore = e.message;
+        return r;
+      });
     },
 
     /* ultimo prezzo */
@@ -300,7 +369,7 @@
       }
       for (var i = 0; i < y.length; i += 20) (function (chunk) {
         var u = 'https://query1.finance.yahoo.com/v7/finance/spark?symbols=' + chunk.map(encodeURIComponent).join(',') + '&range=1d&interval=5m';
-        jobs.push(viaProxy(u).then(function (j) {
+        jobs.push(yahoo(u).then(function (j) {
           if (j && j.spark && j.spark.result) {
             j.spark.result.forEach(function (r) {
               var m = r.response && r.response[0] && r.response[0].meta; if (!m) return;
@@ -371,14 +440,30 @@
     },
     cambioNoto: function (da, a) { if (da === a) return 1; var c = FX[(da || '') + (a || '')]; return c ? c.v : null; },
 
+    /* prova ogni proxy separatamente: {proxy: [{nome, esito, ms}], ...} */
     prova: function () {
       var t0 = Date.now();
+      var yu = 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=5d';
+      var px = Promise.all(proxies().map(function (p) {
+        var t = Date.now();
+        return unProxy(p, yu, 12000).then(function (j) {
+          if (!(j.chart && j.chart.result)) throw new Error('risposta inattesa');
+          return { nome: p.split('/')[2], esito: 'ok', ms: Date.now() - t, ok: true, url: p };
+        }).catch(function (e) { return { nome: p.split('/')[2], esito: e.message, ms: Date.now() - t, ok: false, url: p }; });
+      })).then(function (a) {
+        var best = a.filter(function (x) { return x.ok; }).sort(function (x, y) { return x.ms - y.ms; })[0];
+        if (best) ricorda(best.url);
+        return a;
+      });
       return Promise.all([
-        Y.chart('AAPL', '1d', '5d').then(function () { return 'ok · proxy ' + proxies()[bestProxy]; }).catch(function (e) { return 'errore: ' + e.message; }),
+        px,
         B.price('BTCUSDT').then(function () { return 'ok'; }).catch(function (e) { return 'errore: ' + e.message; }),
         cfg().twelveKey ? T.chart('AAPL', '1D').then(function () { return 'ok'; }).catch(function (e) { return 'errore: ' + e.message; }) : Promise.resolve('chiave non inserita'),
         SB.dati.cambio('USD', 'EUR').then(function (v) { return 'ok (1 USD = ' + v.toFixed(4) + ' EUR)'; }).catch(function (e) { return 'errore: ' + e.message; })
-      ]).then(function (r) { return { yahoo: r[0], binance: r[1], twelve: r[2], cambi: r[3], ms: Date.now() - t0 }; });
+      ]).then(function (r) {
+        var ok = r[0].filter(function (x) { return x.ok; }).length;
+        return { proxy: r[0], yahoo: ok ? 'ok (' + ok + ' proxy su ' + r[0].length + ')' : 'errore: nessun proxy funziona', binance: r[1], twelve: r[2], cambi: r[3], online: navigator.onLine !== false, ms: Date.now() - t0 };
+      });
     },
     parseId: parseId
   };
